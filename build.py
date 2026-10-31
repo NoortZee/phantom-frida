@@ -1550,6 +1550,19 @@ def apply_binary_patches(binary_path: Path, custom_name: str, extended: bool = F
 
 def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
     log(f"Configuring for {arch}...", "STEP")
+
+    # Frida's ./configure refuses to reconfigure an existing build tree
+    # ("Already configured. Wipe ./build to reconfigure."). This matters when
+    # building multiple architectures in one run: after finishing android-arm64,
+    # the leftover build/ directory blocks the android-arm configure step.
+    # Wiping it here also re-runs the post-build patches cleanly because the
+    # freshly generated build files (e.g. meson-generated_agent.c) get
+    # regenerated and re-patched by apply_post_build_patches().
+    build_dir = frida_dir / "build"
+    if build_dir.exists():
+        log(f"Wiping previous build tree for {arch}...", "STEP")
+        shutil.rmtree(build_dir)
+
     run(
         ["./configure", f"--host={arch}"],
         cwd=frida_dir,
