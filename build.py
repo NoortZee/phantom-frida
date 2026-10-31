@@ -721,17 +721,45 @@ def apply_source_patches(frida_dir: Path, custom_name: str):
 
 
 def apply_ndk29_compiler_fix(frida_dir: Path):
-    """Исправляет отсутствующую метку 'skip' в gumprocess-linux.c (баг Frida 17.16.4 + NDK r29)."""
+    """Fix missing 'skip:' label in gumprocess-linux.c (Frida 17.16.4 + NDK r29).
+
+    The --temp-fixes stability patch inserts `goto skip;` inside a thread
+    enumeration loop, but there is no matching `skip:` label. Since the goto
+    is inside a loop, `continue;` is semantically equivalent.
+
+    IMPORTANT: This function MUST run AFTER apply_stability_fixes(), otherwise
+    the injected `goto skip;` will not be present in the file yet.
+    """
     target = frida_dir / "subprojects/frida-gum/gum/backend-linux/gumprocess-linux.c"
     if not target.exists():
+        log(f"  [NDK r29] {target.name} not found, skipping", "WARN")
         return
 
     content = target.read_text(encoding="utf-8")
-    if "goto skip;" in content and "skip:" not in content:
-        # Так как этот goto находится внутри цикла while, 'continue' делает то же самое, но безопаснее
+    goto_count = content.count("goto skip;")
+    if goto_count == 0:
+        log("  [NDK r29] No 'goto skip;' to fix", "INFO")
+        return
+
+    # Count real label definitions (start of line, optional whitespace, "skip:").
+    # Naive `"skip:" in content` would match comments, strings, and unrelated
+    # identifiers like "trailing_skip:".
+    label_count = len(re.findall(r"^\s*skip\s*:", content, re.MULTILINE))
+    log(
+        f"  [NDK r29] Diagnostics: {goto_count} 'goto skip;', "
+        f"{label_count} 'skip:' label definition(s)",
+        "INFO",
+    )
+
+    if goto_count > label_count:
         content = content.replace("goto skip;", "continue;")
         target.write_text(content, encoding="utf-8")
-        log("  [NDK r29] Fixed missing 'skip' label in gumprocess-linux.c (goto skip -> continue)", "OK")
+        log(
+            f"  [NDK r29] Replaced {goto_count} 'goto skip;' with 'continue;'",
+            "OK",
+        )
+    else:
+        log("  [NDK r29] Labels are balanced, no fix needed", "INFO")
 
 
 def apply_targeted_patches(frida_dir: Path, custom_name: str, frida_major: int):
@@ -1941,9 +1969,6 @@ Transformations and verification boundaries:
     if args.strict_wx:
         apply_strict_wx_patch(frida_dir, custom_name)
 
-    # NDK r29 compiler fix
-    apply_ndk29_compiler_fix(frida_dir)
-
     # Step 3.5: Extended patches
     if args.extended:
         apply_extended_patches(frida_dir, custom_name, port)
@@ -1953,6 +1978,10 @@ Transformations and verification boundaries:
     # Step 4: Stability fixes
     if args.temp_fixes:
         apply_stability_fixes(frida_dir, frida_major)
+
+    # NDK r29 compiler fix — MUST run AFTER stability fixes,
+    # because --temp-fixes injects `goto skip;` into gumprocess-linux.c
+    apply_ndk29_compiler_fix(frida_dir)
 
     if args.skip_build:
         log("=" * 60, "HEADER")
