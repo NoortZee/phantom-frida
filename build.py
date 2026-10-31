@@ -720,6 +720,20 @@ def apply_source_patches(frida_dir: Path, custom_name: str):
     log("Global source patches complete", "OK")
 
 
+def apply_ndk29_compiler_fix(frida_dir: Path):
+    """Исправляет отсутствующую метку 'skip' в gumprocess-linux.c (баг Frida 17.16.4 + NDK r29)."""
+    target = frida_dir / "subprojects/frida-gum/gum/backend-linux/gumprocess-linux.c"
+    if not target.exists():
+        return
+
+    content = target.read_text(encoding="utf-8")
+    if "goto skip;" in content and "skip:" not in content:
+        # Так как этот goto находится внутри цикла while, 'continue' делает то же самое, но безопаснее
+        content = content.replace("goto skip;", "continue;")
+        target.write_text(content, encoding="utf-8")
+        log("  [NDK r29] Fixed missing 'skip' label in gumprocess-linux.c (goto skip -> continue)", "OK")
+
+
 def apply_targeted_patches(frida_dir: Path, custom_name: str, frida_major: int):
     """Apply patches to specific files (memfd, libc hooks, SELinux, build system)."""
     log("=" * 60, "HEADER")
@@ -1926,6 +1940,9 @@ Transformations and verification boundaries:
     apply_targeted_patches(frida_dir, custom_name, frida_major)
     if args.strict_wx:
         apply_strict_wx_patch(frida_dir, custom_name)
+
+    # NDK r29 compiler fix
+    apply_ndk29_compiler_fix(frida_dir)
 
     # Step 3.5: Extended patches
     if args.extended:
